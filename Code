@@ -1,0 +1,322 @@
+#include <LiquidCrystal.h> 
+ 
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7); 
+int voltageSignal = A1; 
+int currentSignal = A2; 
+int firstLED = A3; 
+int secondLED = 2; 
+int thirdLED = 3; 
+int fourthLED = 11; 
+int fifthLED = 12; 
+int sixthLED = 13; 
+int LEDs[6] = { sixthLED, fifthLED, fourthLED, thirdLED, secondLED, firstLED }; 
+int button = 0; 
+int mode = 1; 
+float powerFactorSign = 1.0; 
+float frequency = 50.0; 
+float Vrms = 0.0; 
+float Irms = 0.0; 
+float voltageGain = 300.0; 
+float currentGain = 100.0; 
+float zeroVoltage = 0.0; 
+float zeroCurrent = 0.0; 
+float Power = 0.0; 
+float avgPower = 0.0; 
+float powerFactorDefault = 0.95; 
+float phiDefault = acos(powerFactorDefault); 
+float currentPowerFactor = 0.0; 
+float currentPhi = acos(currentPowerFactor); 
+float Qc = 0.0; 
+ 
+float capacitorBankValues[] = { 5000, 15000, 9000, 10000, 20000, 2000 }; 
+float capacitorBank[63] = {}; 
+int num_capacitors = sizeof(capacitorBankValues) / 
+sizeof(capacitorBankValues[0]); 
+int binary_numbers[] = { 
+  0b000001, 0b000010, 0b000011, 0b000100, 0b000101, 0b000110, 0b000111, 0b001000, 
+  0b001001, 0b001010, 0b001011, 0b001100, 0b001101, 0b001110, 0b001111, 0b010000, 
+  0b010001, 0b010010, 0b010011, 0b010100, 0b010101, 0b010110, 0b010111, 0b011000, 
+  0b011001, 0b011010, 0b011011, 0b011100, 0b011101, 0b011110, 0b011111, 0b100000, 
+  0b100001, 0b100010, 0b100011, 0b100100, 0b100101, 0b100110, 0b100111, 0b101000, 
+  0b101001, 0b101010, 0b101011, 0b101100, 0b101101, 0b101110, 0b101111, 0b110000, 
+  0b110001, 0b110010, 0b110011, 0b110100, 0b110101, 0b110110, 0b110111, 0b111000, 
+  0b111001, 0b111010, 0b111011, 0b111100, 0b111101, 0b111110, 0b111111 
+}; 
+ 
+void setup() { 
+  Serial.begin(9600); 
+  lcd.begin(16, 2); 
+ 
+  for (int i = 0; i < 6; i++) { 
+    pinMode(LEDs[i], OUTPUT); 
+  } 
+ 
+  for (int i = 0; i < 63; i++) { 
+    capacitorBank[i] = capacitorBankCalculations(num_capacitors, 
+binary_numbers[i], capacitorBankValues); 
+  } 
+} 
+ 
+void loop() { 
+  button = analogRead(0); 
+  if (button > 600 && button < 800) { 
+    if (mode == 4) { 
+      mode = 0; 
+    } 
+    mode = mode + 1; 
+  } 
+ 
+  zeroVoltage = getZeroPoint(voltageSignal); 
+  Vrms = rmsCalculation(voltageSignal, zeroVoltage, voltageGain); 
+  zeroCurrent = getZeroPoint(currentSignal); 
+  Irms = rmsCalculation(currentSignal, zeroCurrent, currentGain); 
+  lead_or_lag(); 
+  averagePowerCalculation(); 
+  powerFactorCalculation(); 
+  lightsUP(0b000000); 
+ 
+  switch (mode) { 
+    case 1: 
+      display_rmsValues(); 
+      break; 
+ 
+    case 2: 
+      displayPower(); 
+      break; 
+ 
+    case 3: 
+      setPowerFactor(); 
+      break; 
+ 
+    case 4: 
+      powerFactorCorrection(); 
+      break; 
+  } 
+} 
+ 
+float rmsCalculation(int signalPin, float zero, float gain) { 
+  float period = 10000000.0 / frequency; 
+  double signalSum = 0.0; 
+  float signalNow = 0.0; 
+  float measurementsCount = 0.0; 
+  float t_start = micros(); 
+  while ((micros() - t_start) <= period) { 
+    signalNow = analogRead(signalPin) - zero; 
+    signalSum += signalNow * signalNow; 
+    measurementsCount++; 
+  } 
+  return gain * ((sqrt(signalSum / measurementsCount) * 5.0) / 1023.0); 
+} 
+ 
+float getZeroPoint(int signalPin) { 
+  float period = 10000000.0 / frequency; 
+  uint32_t Vsum = 0; 
+  uint32_t measurements_count = 0; 
+  uint32_t t_start = micros(); 
+  while ((micros() - t_start) <= period) { 
+    Vsum += analogRead(signalPin); 
+    measurements_count++; 
+  } 
+  return Vsum / measurements_count; 
+} 
+ 
+void averagePowerCalculation() { 
+  float period = 10000000.0 / frequency; 
+  uint32_t measurements_count = 0; 
+  float t_start = micros(); 
+  while ((micros() - t_start) <= period) { 
+    avgPower += (voltageGain * (analogRead(voltageSignal) - zeroVoltage) * (5 / 
+1023.0)) * (currentGain * (analogRead(currentSignal) - zeroCurrent) * (5 / 
+1023.0)); 
+    measurements_count++; 
+  } 
+  avgPower = avgPower / measurements_count; 
+} 
+ 
+void powerFactorCalculation() { 
+  Power = Vrms * Irms; 
+  currentPowerFactor = powerFactorSign * (avgPower / Power); 
+  if (currentPowerFactor > 1) { 
+    currentPowerFactor = 1; 
+  } 
+  currentPhi = powerFactorSign * acos(currentPowerFactor); 
+} 
+ 
+void display_rmsValues() { 
+  float time = millis(); 
+  lcd.clear(); 
+  lcd.setCursor(0, 0); 
+  lcd.print("Vrms = "); 
+  lcd.print(Vrms); 
+  lcd.setCursor(0, 1); 
+  lcd.print("Irms = "); 
+  lcd.print(Irms); 
+  //while ((millis() - time) < 500.0) {} 
+} 
+ 
+void powerFactorCorrection() { 
+  lcd.clear(); 
+  Qc = avgPower * (tan(currentPhi) - tan(phiDefault)); 
+  bestCombination(); 
+} 
+ 
+void setPowerFactor() { 
+  float time = millis(); 
+  lcd.clear(); 
+  lcd.print("PFr= "); 
+  lcd.print(powerFactorDefault); 
+ 
+  if (button > 200 && button < 400) { 
+    if (powerFactorDefault <= currentPowerFactor) { 
+      powerFactorDefault = currentPowerFactor; 
+      phiDefault = acos(powerFactorDefault); 
+    } else { 
+      powerFactorDefault -= 0.01; 
+      phiDefault = acos(powerFactorDefault); 
+    } 
+  } else if (button > 60 && button < 200) { 
+    if (powerFactorDefault >= 1) { 
+      powerFactorDefault = 1; 
+      phiDefault = acos(1); 
+    } else { 
+      powerFactorDefault += 0.01; 
+      phiDefault = acos(powerFactorDefault); 
+    } 
+  } 
+  while ((millis() - time) < 150.0) {} 
+} 
+ 
+float capacitorBankCalculations(int num_capacitors, int binary_input, float 
+capacitorBankValues[]) { 
+  double equivalent_capacitance = 0; 
+  for (int i = 0; i < num_capacitors; ++i) { 
+    if (binary_input & (1UL << i)) { 
+      equivalent_capacitance += capacitorBankValues[i]; 
+    } 
+  } 
+  return equivalent_capacitance; 
+} 
+ 
+void displayPower() { 
+  lcd.clear(); 
+  lcd.setCursor(0, 0); 
+  lcd.print("Pavg = "); 
+  lcd.print(avgPower); 
+  lcd.setCursor(0, 1); 
+  lcd.print("PFc= "); 
+  lcd.print(currentPowerFactor, 5); 
+  //while ((millis() - time) < 500) {} 
+} 
+ 
+void lead_or_lag() { 
+  float period = 1000000.0 / frequency; 
+  float voltageArray[] = {}; 
+  float currentArray[] = {}; 
+  float voltageMax = -1000000.0; 
+  float currentMax = -1000000.0; 
+  int voltageMaxIndex = 0; 
+  int currentMaxIndex = 0; 
+ 
+  int counter = 0; 
+  float time = micros(); 
+  while ((micros() - time) <= period) { 
+    voltageArray[counter] = analogRead(voltageSignal) - zeroVoltage; 
+    counter++; 
+  } 
+ 
+  counter = 0; 
+  time = micros(); 
+  while ((micros() - time) <= period) { 
+    currentArray[counter] = analogRead(currentSignal) - zeroCurrent; 
+    counter++; 
+  } 
+ 
+  for (int i = 0; i < sizeof(voltageArray) / sizeof(voltageArray[0]); i++) { 
+    if (voltageArray[i] > voltageMax) { 
+      voltageMax = voltageArray[i]; 
+      voltageMaxIndex = i; 
+    } 
+  } 
+ 
+  for (int i = 0; i < sizeof(currentArray) / sizeof(currentArray[0]); i++) { 
+    if (currentArray[i] > currentMax) { 
+      currentMax = currentArray[i]; 
+      currentMaxIndex = i; 
+    } 
+  } 
+ 
+  if (voltageMaxIndex < currentMaxIndex) { 
+    powerFactorSign = 1.0; 
+  } else if (voltageMaxIndex > currentMaxIndex) { 
+    powerFactorSign = -1.0; 
+  } 
+} 
+ 
+void bestCombination() { 
+  float target = Qc; 
+  byte nearIndex = 0; 
+  float nearDiff = abs(capacitorBank[0] - target); 
+  for (byte i = 1; i < 63; i++) { 
+    if (abs(capacitorBank[i] - target) < nearDiff) { 
+      nearIndex = i; 
+      nearDiff = abs(capacitorBank[i] - target); 
+    } 
+  } 
+  float realPower = Power * cos(currentPhi); 
+  float imaginaryPower = Power * sin(currentPhi) - capacitorBank[nearIndex]; 
+  float newPF = cos(atan(imaginaryPower / realPower)); 
+  displayPowerFactorCorrection(newPF, nearIndex); 
+} 
+ 
+void lightsUP(byte index) { 
+  for (int i = 0; i < 6; ++i) { 
+    if (index & (1UL << i)) { 
+      digitalWrite(LEDs[i], HIGH); 
+    } else { 
+      digitalWrite(LEDs[i], LOW); 
+    } 
+  } 
+} 
+ 
+void displayPowerFactorCorrection(float newPF, byte nearIndex) { 
+  if (abs(capacitorBank[nearIndex] - Qc) > 2000) { 
+    float time = millis(); 
+    while ((millis() - time) < 60000.0) { 
+      button = analogRead(0); 
+      if (button > 600 && button < 800) { 
+        break; 
+      } 
+      float timeLCD = millis(); 
+      lcd.clear(); 
+      lcd.setCursor(0, 0); 
+      lcd.print("Not Enough Qc"); 
+      while ((millis() - timeLCD) < 1000) {} 
+      lcd.clear(); 
+      lcd.setCursor(0, 0); 
+      lcd.print("N: "); 
+      lcd.print(capacitorBank[nearIndex]); 
+      lcd.setCursor(0, 1); 
+      lcd.print("PF: "); 
+      lcd.print(newPF); 
+      lightsUP(binary_numbers[nearIndex]); 
+      timeLCD = millis(); 
+      while ((millis() - timeLCD) < 1000) {} 
+    } 
+  } else { 
+    float time = millis(); 
+    lcd.clear(); 
+    lcd.setCursor(0, 0); 
+    lcd.print("Nearest: "); 
+    lcd.print(capacitorBank[nearIndex]); 
+    lightsUP(binary_numbers[nearIndex]); 
+    lcd.setCursor(0, 1); 
+    lcd.print("PF: "); 
+    lcd.print(newPF, 5); 
+    while ((millis() - time) < 60000.0) { 
+button = analogRead(0); 
+if (button > 600 && button < 800) { 
+break; 
+} 
+} 
+} 
+}
